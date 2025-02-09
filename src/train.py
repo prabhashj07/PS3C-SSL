@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 from .lossfuns import SimCLRLoss  
 
-def train_simclr(model, dataloader, optimizer, device, epochs=5):
+def train_simclr(model, dataloader, optimizer, device, epochs=100):
     """
     TQDM-based loop for self-supervised pre-training using SimCLR.
     

@@ -88,11 +88,11 @@ def main():
     # Create SimCLR model
     simclr_model = SimCLR(base_model=base_resnet, out_dim=128).to(device)
 
-    optimizer_pretrain = optim.Adam(simclr_model.parameters(), lr=1e-3)
+    optimizer_pretrain = optim.Adam(simclr_model.parameters(), lr=1e-4)
 
     # 3) Self-Supervised Pretraining
     print("=== SimCLR Pretraining ===")
-    train_simclr(simclr_model, unlabeled_loader, optimizer_pretrain, device, epochs=1)
+    train_simclr(simclr_model, unlabeled_loader, optimizer_pretrain, device, epochs=100)
 
     # 4) Fine-tune on labeled data
     for param in simclr_model.parameters():
