@@ -49,7 +49,39 @@ It will download the dataset from Google Drive and extract it to the `data/` dir
 
 ```bash
 make dataset
-``````
+```
+
+### Running the Training Script  
+
+To train the SimCLR model and fine-tune it on Pap smear images, use the following command:  
+
+```bash
+python main.py \
+    --dataset_root path/to/dataset \
+    --test_dir path/to/test_images \
+    --pretrain_batch_size 32 \
+    --ft_batch_size 64 \
+    --test_batch_size 1 \
+    --pretrain_epochs 100 \
+    --ft_epochs 5 \
+    --pretrain_lr 1e-4 \
+    --ft_lr 1e-3 \
+    --out_dim 128
+```
+#### Arguments  
+
+| Argument               | Description                                            | Default Value |
+|------------------------|--------------------------------------------------------|--------------|
+| `--dataset_root`       | Path to the directory containing the training dataset  | `data`       |
+| `--test_dir`           | Path to the directory containing test images           | `data`       |
+| `--pretrain_batch_size`| Batch size for SimCLR pretraining                      | `32`         |
+| `--ft_batch_size`      | Batch size for fine-tuning                             | `64`         |
+| `--test_batch_size`    | Batch size for inference                               | `1`          |
+| `--pretrain_epochs`    | Number of epochs for self-supervised pretraining       | `100`        |
+| `--ft_epochs`         | Number of epochs for fine-tuning                       | `5`          |
+| `--pretrain_lr`       | Learning rate for pretraining                          | `1e-4`       |
+| `--ft_lr`             | Learning rate for fine-tuning                          | `1e-3`       |
+| `--out_dim`           | Output dimension for SimCLR projection head            | `128`        |
 
 ## License
 
