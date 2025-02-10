@@ -6,156 +6,160 @@ import torch.optim as optim
 import torchvision.transforms as transforms
 import numpy as np
 import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import models
+import argparse
 
 from src.dataset import *
 from src.model import *
 from src.train import train_simclr
-from linear import  LinearClassifier, fine_tune
+from linear import LinearClassifier, fine_tune
 
 ##############################################################################
 # Main
 ##############################################################################
 def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Train SimCLR and classify Pap smear images.')
+    parser.add_argument('--dataset_root', type=str, default='data',
+                        help='Root directory containing training datasets')
+    parser.add_argument('--test_dir', type=str, default='data',
+                        help='Directory containing test images')
+    parser.add_argument('--pretrain_batch_size', type=int, default=32,
+                        help='Batch size for self-supervised pretraining')
+    parser.add_argument('--ft_batch_size', type=int, default=64,
+                        help='Batch size for fine-tuning')
+    parser.add_argument('--test_batch_size', type=int, default=1,
+                        help='Batch size for inference')
+    parser.add_argument('--pretrain_epochs', type=int, default=100,
+                        help='Number of pretraining epochs')
+    parser.add_argument('--ft_epochs', type=int, default=5,
+                        help='Number of fine-tuning epochs')
+    parser.add_argument('--pretrain_lr', type=float, default=1e-4,
+                        help='Learning rate for pretraining')
+    parser.add_argument('--ft_lr', type=float, default=1e-3,
+                        help='Learning rate for fine-tuning')
+    parser.add_argument('--out_dim', type=int, default=128,
+                        help='Output dimension for SimCLR projection head')
+    args = parser.parse_args()
+
+    # Print arguments
+    print("\n=== Configuration ===")
+    for arg in vars(args):
+        print(f"{arg}: {getattr(args, arg)}")
+    print("=====================\n")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 1) Unlabeled dataset for self-supervised pretraining
-    # -------------------------------------------------------------------------
-    # dataset_root: Directory containing subfolders: healthy, unhealthy, rubbish, bothcells
-    # test_dir: Directory containing test images (e.g., .png files)
-    # -------------------------------------------------------------------------
-    dataset_root = "data"  
-    test_dir = "data"             
+    # 1) Create datasets and dataloaders
+    unlabeled_dataset = UnlabeledPapSmearDataset(
+        root_dir=args.dataset_root, 
+        transform=simclr_transform
+    )
+    unlabeled_loader = DataLoader(
+        unlabeled_dataset, 
+        batch_size=args.pretrain_batch_size,
+        shuffle=True, 
+        num_workers=4
+    )
 
-    # Create the Unlabeled Dataset for self-supervised pretraining
-    unlabeled_dataset = UnlabeledPapSmearDataset(root_dir=dataset_root, transform=simclr_transform)
-    unlabeled_loader = DataLoader(unlabeled_dataset, batch_size=32, shuffle=True, num_workers=4)
-
-    # Create the Labeled Dataset for fine-tuning (classification)
-    labeled_dataset = LabeledPapSmearDataset(root_dir=dataset_root, transform=classification_transform)
-
-    # Compute sample weights for class balancing
+    labeled_dataset = LabeledPapSmearDataset(
+        root_dir=args.dataset_root, 
+        transform=classification_transform
+    )
     sample_weights = compute_class_weights(labeled_dataset)
+    sampler = WeightedRandomSampler(sample_weights, len(sample_weights), replacement=True)
+    labeled_loader = DataLoader(
+        labeled_dataset,
+        batch_size=args.ft_batch_size,
+        sampler=sampler,
+        num_workers=4
+    )
 
-    # Create sampler
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
+    test_dataset = PapSmearTestDataset(
+        root_dir=args.test_dir, 
+        transform=classification_transform
+    )
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=args.test_batch_size,
+        shuffle=False, 
+        num_workers=4
+    )
 
-    # Use sampler in DataLoader
-    labeled_loader = DataLoader(labeled_dataset, batch_size=32, sampler=sampler, num_workers=4)
-
-    print(f"Labeled dataset size: {len(labeled_dataset)}")
-
-    # Create the Test Dataset for inference
-    test_dataset = PapSmearTestDataset(root_dir=test_dir, transform=classification_transform)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4)
-
-    # Print out dataset sizes to verify
-    print(f"Unlabeled dataset size: {len(unlabeled_dataset)}")
-    print(f"Labeled dataset size: {len(labeled_dataset)}")
-    print(f"Test dataset size: {len(test_dataset)}")
-
-    # -------------------------------------------------------------------------
-    # Example Iteration through each dataloader
-    # -------------------------------------------------------------------------
-
-    # Iterate through one batch of the unlabeled dataset
-    print("\nIterating through a batch of Unlabeled Dataset (for SimCLR pretraining):")
-    for batch in unlabeled_loader:
-        x_i, x_j = batch
-        print(f"Unlabeled batch shapes: x_i: {x_i.shape}, x_j: {x_j.shape}")
-        break
-
-    # Iterate through one batch of the labeled dataset
-    print("\nIterating through a batch of Labeled Dataset (for classification):")
-    for batch in labeled_loader:
-        images, labels = batch
-        print(f"Labeled batch shapes: images: {images.shape}, labels: {labels.shape}")
-        break
-
-    # Iterate through one batch of the test dataset
-    print("\nIterating through a batch of Test Dataset (for inference):")
-    for batch in test_loader:
-        images, filenames = batch
-        print(f"Test batch shapes: images: {images.shape}")
-        print(f"Filenames: {filenames}")
-        break
-
-    # 2) Build SimCLR model
+    # 2) Initialize models
     base_resnet = models.resnet50(weights=None)
-    in_feats = base_resnet.fc.in_features  # Store in_features of FC layer
-
-    # Create SimCLR model
-    simclr_model = SimCLR(base_model=base_resnet, out_dim=128).to(device)
-
-    optimizer_pretrain = optim.Adam(simclr_model.parameters(), lr=1e-4)
-
-    # 3) Self-Supervised Pretraining
+    simclr_model = SimCLR(
+        base_model=base_resnet, 
+        out_dim=args.out_dim
+    ).to(device)
+    
+    # 3) Pretraining
+    optimizer_pretrain = optim.Adam(
+        simclr_model.parameters(), 
+        lr=args.pretrain_lr
+    )
     print("=== SimCLR Pretraining ===")
-    train_simclr(simclr_model, unlabeled_loader, optimizer_pretrain, device, epochs=100)
+    train_simclr(
+        simclr_model, 
+        unlabeled_loader, 
+        optimizer_pretrain, 
+        device, 
+        epochs=args.pretrain_epochs
+    )
 
-    # 4) Fine-tune on labeled data
-    for param in simclr_model.parameters():
-        param.requires_grad = False  # Freeze SimCLR model
+    # 4) Fine-tuning
+    classifier = LinearClassifier(
+        in_feats=base_resnet.fc.in_features,
+        num_classes=3
+    ).to(device)
+    optimizer_ft = optim.Adam(
+        classifier.parameters(), 
+        lr=args.ft_lr
+    )
+    print("\n=== Fine-Tuning ===")
+    fine_tune(
+        simclr_model, 
+        classifier, 
+        labeled_loader, 
+        optimizer_ft, 
+        nn.CrossEntropyLoss(), 
+        device, 
+        epochs=args.ft_epochs
+    )
 
-    labeled_ds = LabeledPapSmearDataset(dataset_root, transform=classification_transform)
-    labeled_loader = DataLoader(labeled_ds, batch_size=64, shuffle=True, num_workers=7)
-
-    # Build linear classifier
-    classifier = LinearClassifier(in_feats, num_classes=3).to(device)
-    optimizer_ft = optim.Adam(classifier.parameters(), lr=1e-3)
-    criterion = nn.CrossEntropyLoss()
-
-    print("\n=== Fine-Tuning on Labeled Data ===")
-    fine_tune(simclr_model, classifier, labeled_loader, optimizer_ft, criterion, device, epochs=5)
-
-    # 5) Inference on test images
-    test_ds = PapSmearTestDataset(dataset_root, transform=classification_transform)
-    test_loader = DataLoader(test_ds, batch_size=1, shuffle=False)
-
+    # 5) Inference and visualization
     simclr_model.eval()
     classifier.eval()
-
-    print("\n=== Inference + Plotting ===")
+    
     predictions = []
     images_for_plot = []
     filenames = []
-
+    
     with torch.no_grad():
         for img_tensor, fname in test_loader:
-            img_tensor = img_tensor.to(device)
-            feats = simclr_model.encoder(img_tensor)
-            logits = classifier(feats)
-            pred_idx = logits.argmax(dim=1).item()
-            pred_class = labeled_ds.class_names[pred_idx]
-
+            feats = simclr_model.encoder(img_tensor.to(device))
+            pred_class = labeled_dataset.class_names[classifier(feats).argmax().item()]
+            
             predictions.append(pred_class)
-            filenames.append(fname)
+            filenames.extend(fname)
+            images_for_plot.append(img_tensor[0].cpu())
 
-            images_for_plot.append(img_tensor[0].cpu())  # Move image back to CPU for plotting
-
-    # 6) Plot some results
-    num_to_plot = min(len(images_for_plot), 8)
+    # Visualization
+    num_to_plot = min(8, len(images_for_plot))
     plt.figure(figsize=(12, 6))
     for i in range(num_to_plot):
         plt.subplot(2, 4, i+1)
-        inv = transforms.Normalize(
+        img = transforms.Normalize(
             mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
             std=[1/0.229, 1/0.224, 1/0.225]
-        )
-        img_inv = inv(images_for_plot[i])
-        img_np = img_inv.permute(1, 2, 0).numpy()
-        img_np = np.clip(img_np, 0, 1)
-        plt.imshow(img_np)
-        plt.title(f"{filenames[i][0]} => {predictions[i]}")
-        plt.axis("off")
+        )(images_for_plot[i]).permute(1, 2, 0).clamp(0, 1).numpy()
+        
+        plt.imshow(img)
+        plt.title(f"{filenames[i]}\nPred: {predictions[i]}")
+        plt.axis('off')
     plt.tight_layout()
     plt.show()
-
-    print("Predictions on test images:")
-    for f, p in zip(filenames, predictions):
-        print(f"{f[0]} => {p}")
-
 
 if __name__ == "__main__":
     main()
