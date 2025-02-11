@@ -4,7 +4,7 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from lossfuns import SimCLRLoss  
+from .lossfuns import SimCLRLoss  
 
 def train_simclr(model, dataloader, optimizer, device, epochs=100):
     """
