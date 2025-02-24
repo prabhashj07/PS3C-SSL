@@ -31,7 +31,7 @@ def main():
                         help='Batch size for fine-tuning')
     parser.add_argument('--test_batch_size', type=int, default=1,
                         help='Batch size for inference')
-    parser.add_argument('--pretrain_epochs', type=int, default=100,
+    parser.add_argument('--pretrain_epochs', type=int, default=50,
                         help='Number of pretraining epochs')
     parser.add_argument('--ft_epochs', type=int, default=5,
                         help='Number of fine-tuning epochs')
